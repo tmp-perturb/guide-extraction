@@ -1,0 +1,98 @@
+# ==============================================================================
+# chemistry_spec.yaml — Single Source of Truth for 10x Chemistry Parameters
+# ==============================================================================
+# Every entry maps a user-facing tenx_chemistry key to all downstream parameters
+# needed by simpleaf, HAM, whitelist translation, and merge.
+#
+# Adding a new chemistry: copy the closest existing entry and adjust the fields.
+#
+# Fields:
+#   af_chemistry      — simpleaf --chemistry argument (or base if override present)
+#   whitelist          — 10x barcode whitelist filename (auto-downloaded if needed)
+#   expected_ori       — expected orientation for alevin-fry ("fw" or "rc")
+#   translation        — whether Feature↔GEX barcode translation is needed
+#                        (True for dual-oligo systems like cs1/cs2 bead capture;
+#                         False for single-oligo systems like soluble RT primer)
+#   translation_file   — RNA↔Feature translation table filename (auto-downloaded
+#                        into whitelist_dir; Snakefile derives config["translation_table"]
+#                        from it). null for single-oligo (5') chemistries.
+#   geometry_override  — explicit piscem geometry string, bypassing __builtin handler
+#                        (null = use af_chemistry's default geometry)
+#   ham_chemistry      — HAM chemistry name (maps to CHEMISTRY_CONFIGS in HAM)
+#   umi_len            — UMI length in bp (12 for v3 chemistries, 10 for 5' v1/v2)
+#
+# NOTE: Indirect capture methods (e.g. 3' v2 with GBC) are NOT supported.
+# The protospacer must be present in the guide FASTQ R2 for direct capture.
+# ==============================================================================
+
+3v3:
+  af_chemistry: "10xv3"
+  whitelist: "3M-february-2018.txt"
+  expected_ori: "fw"
+  translation: true
+  translation_file: "translation_3M-february-2018.txt"
+  geometry_override: null
+  ham_chemistry: "10xv3"
+  umi_len: 12
+
+3v4:
+  af_chemistry: "10xv3"
+  whitelist: "3M-3pgex-may-2023.txt"
+  expected_ori: "fw"
+  translation: true
+  translation_file: "translation_3M-3pgex-may-2023.txt"
+  geometry_override: null
+  ham_chemistry: "10xv3"
+  umi_len: 12
+
+3LT:
+  af_chemistry: "10xv3"
+  whitelist: "3M-february-2018.txt"
+  expected_ori: "fw"
+  translation: true
+  translation_file: "translation_3M-february-2018.txt"
+  geometry_override: null
+  ham_chemistry: "10xv3"
+  umi_len: 12
+
+multiome:
+  af_chemistry: "10xv3"
+  whitelist: "3M-february-2018.txt"
+  expected_ori: "fw"
+  translation: true
+  translation_file: "translation_3M-february-2018.txt"
+  geometry_override: null
+  ham_chemistry: "10xv3"
+  umi_len: 12
+
+# ── 5' chemistries (soluble RT primer, single-oligo — no translation needed) ──
+
+5v1:
+  af_chemistry: "10xv2-5p"
+  whitelist: "737K-august-2016.txt"
+  expected_ori: "rc"
+  translation: false
+  translation_file: null
+  geometry_override: "1{b[16]u[10]x:}2{r:}"
+  ham_chemistry: "10xv2-5p"
+  umi_len: 10
+
+5v2:
+  af_chemistry: "10xv2-5p"
+  whitelist: "737K-august-2016.txt"
+  expected_ori: "rc"
+  translation: false
+  translation_file: null
+  geometry_override: "1{b[16]u[10]x:}2{r:}"
+  ham_chemistry: "10xv2-5p"
+  umi_len: 10
+
+5v3:
+  af_chemistry: "10xv2-5p"
+  whitelist: "3M-5pgex-jan-2023.txt"
+  expected_ori: "rc"
+  translation: false
+  translation_file: null
+  geometry_override: "1{b[16]u[12]x:}2{r:}"
+  ham_chemistry: "10xv2-5p-12umi"
+  umi_len: 12
