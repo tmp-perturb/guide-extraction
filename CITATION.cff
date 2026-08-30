@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this module, please cite it."
+title: "guide_extraction (Omnibenchmark guide-extraction module)"
+authors:
+  - given-names: "Yunzhe"
+    family-names: "Liu"
+license: MIT
+version: "0.1.0"
+date-released: "2026-08-26"
