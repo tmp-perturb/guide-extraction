@@ -49,6 +49,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "scripts")
 CHEMISTRY_SPEC_PATH = os.path.join(HERE, "config", "chemistry_spec.yaml")
+HAM_SRC = os.path.join(HERE, "vendor", "ham", "src")
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,13 @@ def _run(cmd, env=None):
     """Run a subprocess, echoing the command; raise on failure."""
     print("+ " + " ".join(str(c) for c in cmd), flush=True)
     subprocess.run([str(c) for c in cmd], check=True, env=env)
+
+
+def _ham(args):
+    """Run the module-bundled HAM implementation without installing it."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = HAM_SRC + os.pathsep + env.get("PYTHONPATH", "")
+    _run([sys.executable, "-m", "ham.cli", *args], env=env)
 
 
 def _bool(v):
@@ -205,12 +213,12 @@ def hash_quant(reads1, reads2, wl, hash_file, lane_dir, chem,
     out_dir = os.path.join(lane_dir, "guide_quant")
     os.makedirs(out_dir, exist_ok=True)
     hits = os.path.join(out_dir, "hits.npz")
-    _run(["ham", "match", "-1", reads1, "-2", reads2, "-w", wl,
+    _ham(["match", "-1", reads1, "-2", reads2, "-w", wl,
           "-g", hash_file, "-o", hits, "-t", threads,
           "--cb-max-hamming", cb_max_hamming,
           "--chemistry", chem.get("ham_chemistry", "10xv3")])
     umi_len = chem.get("umi_len", 12)
-    _run(["ham", "dedup", "-i", hits, "-o", os.path.join(out_dir, "matrix"),
+    _ham(["dedup", "-i", hits, "-o", os.path.join(out_dir, "matrix"),
           "-t", umi_threshold, "--umi-len", umi_len])
     return os.path.join(out_dir, "matrix")
 
@@ -220,7 +228,7 @@ def merge(quant_dir, name, output_dir, chem, translation_table):
     lane_list = os.path.join(output_dir, ".lane_list.tsv")
     with open(lane_list, "w") as f:
         f.write(f"{name}\t{quant_dir}\t{lane_suffix(name)}\n")
-    _run(["ham", "merge", "--lanes", lane_list, "--out", output_dir,
+    _ham(["merge", "--lanes", lane_list, "--out", output_dir,
           "--prefix", "merged"])
     if chem.get("translation") and translation_table:
         _run([sys.executable, os.path.join(SCRIPTS, "translate_barcodes.py"),

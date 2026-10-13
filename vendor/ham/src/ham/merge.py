@@ -1,0 +1,160 @@
+"""HAM: Merge per-lane count matrices into a global matrix."""
+
+import os
+import sys
+import gzip
+import time
+import numpy as np
+import scipy.sparse
+from pathlib import Path
+
+
+def _find_file(dirpath: Path, candidates: list, label: str) -> Path:
+    """Find a file by trying multiple candidate names."""
+    for name in candidates:
+        fpath = dirpath / name
+        if fpath.is_file():
+            return fpath
+    raise FileNotFoundError(f"{label}: none of {candidates} found in {dirpath}")
+
+
+def _read_lines(path: Path) -> list:
+    """Read lines from a plain or gzipped file."""
+    if path.suffix == '.gz':
+        with gzip.open(path, 'rt') as f:
+            return [line.strip() for line in f]
+    else:
+        with open(path) as f:
+            return [line.strip() for line in f]
+
+
+def load_lane(alevin_dir: Path, suffix: str):
+    """Load a single lane's quantification output.
+
+    Supports both simpleaf (quants_mat.{mtx,rows,cols}) and hash_matcher
+    (matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz) naming conventions.
+    """
+    mtx_path = _find_file(alevin_dir,
+                          ["quants_mat.mtx", "quants_mat.mtx.gz",
+                           "matrix.mtx", "matrix.mtx.gz"], "matrix")
+    rows_path = _find_file(alevin_dir,
+                           ["quants_mat_rows.txt", "quants_mat_rows.txt.gz",
+                            "barcodes.tsv", "barcodes.tsv.gz"], "barcodes")
+    cols_path = _find_file(alevin_dir,
+                           ["quants_mat_cols.txt", "quants_mat_cols.txt.gz",
+                            "features.tsv", "features.tsv.gz"], "features")
+
+    mtx = scipy.sparse.csr_matrix(scipy.io.mmread(str(mtx_path)))
+
+    rows_raw = _read_lines(rows_path)
+    if rows_raw and '\t' in rows_raw[0]:
+        rows_raw = [r.split('\t')[0] for r in rows_raw]
+    barcodes = [f"{r}{suffix}" for r in rows_raw]
+
+    cols_raw = _read_lines(cols_path)
+    if cols_raw and '\t' in cols_raw[0]:
+        cols_raw = [c.split('\t')[0] for c in cols_raw]
+    features = np.array(cols_raw, dtype=str)
+
+    return mtx, barcodes, features
+
+
+def merge_all(lanes: list, out_dir: str, prefix: str = "merged"):
+    """Merge count matrices from multiple lanes into a single MEX trio."""
+    t0 = time.time()
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Pass 1: build global feature set ──
+    all_feature_ids = []
+    feature_to_global = {}
+    for lane_id, alevin_dir, suffix in lanes:
+        alevin_dir = Path(alevin_dir)
+        cols_path = _find_file(alevin_dir,
+                               ["quants_mat_cols.txt", "quants_mat_cols.txt.gz",
+                                "features.tsv", "features.tsv.gz"], "features")
+        features = np.array(_read_lines(cols_path), dtype=str)
+        if features.size > 0 and '\t' in features[0]:
+            features = np.array([f.split('\t')[0] for f in features], dtype=str)
+        for ft in features:
+            if ft not in feature_to_global:
+                feature_to_global[ft] = len(all_feature_ids)
+                all_feature_ids.append(ft)
+    n_global_features = len(all_feature_ids)
+    print(f"Global feature set: {n_global_features} unique features",
+          file=sys.stderr)
+
+    # ── Pass 2: load and remap matrices ──
+    all_matrices = []
+    all_barcodes = []
+    total_cells = 0
+
+    for lane_id, alevin_dir, suffix in lanes:
+        alevin_dir = Path(alevin_dir)
+        mtx, barcodes, features = load_lane(alevin_dir, suffix)
+
+        local_to_global = np.array(
+            [feature_to_global.get(ft, 0) for ft in features], dtype=np.int32)
+        from scipy.sparse import csr_matrix
+        mtx_coo = mtx.tocoo()
+        global_cols = local_to_global[mtx_coo.col]
+        remapped = csr_matrix(
+            (mtx_coo.data, (mtx_coo.row, global_cols)),
+            shape=(mtx.shape[0], n_global_features),
+        ).tocsc()
+
+        all_matrices.append(remapped)
+        all_barcodes.append(barcodes)
+        total_cells += mtx.shape[0]
+        print(f"  {lane_id}: {mtx.shape[0]:,} cells, "
+              f"{len(features)}->{n_global_features} features, "
+              f"{int(mtx.sum()):,} UMIs", file=sys.stderr)
+
+    # ── Vertical stack ──
+    print(f"\nMerging {len(lanes)} lanes...", file=sys.stderr)
+    merged_mtx = scipy.sparse.vstack(all_matrices, format="csc")
+    merged_barcodes = np.concatenate(all_barcodes)
+    elapsed = time.time() - t0
+
+    assert merged_mtx.shape[0] == total_cells
+    assert merged_mtx.shape[1] == n_global_features
+
+    # ── Write MEX trio ──
+    mtx_out = out_dir / f"{prefix}_matrix.mtx.gz"
+    bc_out  = out_dir / f"{prefix}_barcodes.tsv.gz"
+    ft_out  = out_dir / f"{prefix}_features.tsv.gz"
+
+    print(f"Writing matrix ({merged_mtx.shape[0]} x {merged_mtx.shape[1]})...",
+          file=sys.stderr)
+    with gzip.open(mtx_out, 'wt') as f:
+        f.write("%%MatrixMarket matrix coordinate integer general\n")
+        f.write("% Generated by HAM merge\n")
+        f.write(f"{merged_mtx.shape[0]} {merged_mtx.shape[1]} "
+                f"{merged_mtx.nnz}\n")
+        coo = merged_mtx.tocoo()
+        for r, c, v in zip(coo.row, coo.col, coo.data):
+            f.write(f"{r + 1} {c + 1} {v}\n")
+
+    print(f"Writing barcodes ({len(merged_barcodes)})...", file=sys.stderr)
+    with gzip.open(bc_out, 'wt') as f:
+        f.write("\n".join(merged_barcodes) + "\n")
+
+    print(f"Writing features ({len(all_feature_ids)})...", file=sys.stderr)
+    with gzip.open(ft_out, 'wt') as f:
+        for feat in all_feature_ids:
+            f.write(f"{feat}\t{feat}\tCRISPR Guide Capture\n")
+
+    # ── Summary ──
+    print(f"\n{'='*50}", file=sys.stderr)
+    print(f"Merge complete ({elapsed:.1f}s)", file=sys.stderr)
+    print(f"  Lanes:     {len(lanes)}", file=sys.stderr)
+    print(f"  Cells:     {total_cells:,}", file=sys.stderr)
+    print(f"  Features:  {n_global_features}", file=sys.stderr)
+    print(f"  Non-zero:  {merged_mtx.nnz:,}", file=sys.stderr)
+    print(f"  Output:    {out_dir}/", file=sys.stderr)
+    for fname in [f"{prefix}_matrix.mtx.gz", f"{prefix}_barcodes.tsv.gz",
+                   f"{prefix}_features.tsv.gz"]:
+        fpath = out_dir / fname
+        if fpath.is_file():
+            print(f"    {fname:40s} {fpath.stat().st_size/1024:.0f} KB",
+                  file=sys.stderr)
